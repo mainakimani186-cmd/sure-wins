@@ -1,5 +1,3 @@
-
-
 const cards = document.getElementById("cards");
 const count = document.getElementById("count");
 const updated = document.getElementById("updated");
@@ -7,16 +5,17 @@ const search = document.getElementById("search");
 const refreshBtn = document.getElementById("refresh");
 const filters = document.querySelectorAll("#filters button");
 
-const modal = document.getElementById("modal");
-const detail = document.getElementById("detail");
-const closeModal = document.querySelector(".close");
-
 let allMatches = [];
 let currentTier = "ALL";
+let expandedMatchId = null;
 
 
 async function loadMatches() {
-    cards.innerHTML = '<div class="loading">Loading Sure Wins...</div>';
+    cards.innerHTML = `
+        <p style="color:#aaa;padding:20px;">
+            Loading matches...
+        </p>
+    `;
 
     try {
         const response = await fetch("/api/matches?ts=" + Date.now());
@@ -27,22 +26,24 @@ async function loadMatches() {
 
         const data = await response.json();
 
+        console.log("API DATA:", data);
+
         allMatches = data.matches || [];
+
         count.textContent = allMatches.length;
 
         if (data.updated) {
-            updated.textContent = new Date(
-                data.updated
-            ).toLocaleTimeString();
+            updated.textContent =
+                new Date(data.updated).toLocaleTimeString();
         }
 
         renderMatches();
 
     } catch (error) {
-        console.error(error);
+        console.error("Failed to load matches:", error);
 
         cards.innerHTML = `
-            <div class="error-message">
+            <div style="padding:20px;color:#ff6b6b;">
                 Failed to load matches.<br>
                 <small>${error.message}</small>
             </div>
@@ -52,207 +53,293 @@ async function loadMatches() {
 
 
 function renderMatches() {
-    const query = search.value.toLowerCase().trim();
+    const query = search.value.toLowerCase();
 
     const filtered = allMatches.filter(match => {
-        const tierMatch =
+
+        const matchesTier =
             currentTier === "ALL" ||
             match.tier === currentTier;
 
-        const searchMatch =
+        const matchesSearch =
             match.home.toLowerCase().includes(query) ||
             match.away.toLowerCase().includes(query);
 
-        return tierMatch && searchMatch;
+        return matchesTier && matchesSearch;
     });
 
-    if (!filtered.length) {
+
+    if (filtered.length === 0) {
         cards.innerHTML = `
-            <div class="empty-state">
+            <div style="padding:20px;color:#aaa;">
                 No matches found.
             </div>
         `;
         return;
     }
 
-    cards.innerHTML = filtered.map((match, index) => `
-        <article
-            class="match-row"
-            data-id="${match.id}"
-        >
-            <div class="match-rank">
-                ${(index + 1).toString().padStart(2, "0")}
-            </div>
 
-            <div class="match-main">
-                <div class="match-teams">
-                    <strong>${match.home}</strong>
-                    <span>vs</span>
-                    <strong>${match.away}</strong>
+    cards.innerHTML = filtered.map((match, index) => {
+
+        const isExpanded = expandedMatchId === match.id;
+
+        return `
+            <article
+                class="match-wrapper ${isExpanded ? "expanded" : ""}"
+                data-id="${match.id}"
+            >
+
+                <!-- COMPACT MATCH ROW -->
+
+                <div class="match-row">
+
+                    <div class="match-number">
+                        ${String(index + 1).padStart(2, "0")}
+                    </div>
+
+                    <div class="match-main">
+
+                        <div class="match-teams">
+                            ${match.home}
+                            <span>vs</span>
+                            ${match.away}
+                        </div>
+
+                        <div class="match-meta">
+                            <span class="tier-label">
+                                ${match.tier}
+                            </span>
+
+                            <span>
+                                ${match.region || "Global"}
+                            </span>
+                        </div>
+
+                    </div>
+
+                    <div class="match-confidence">
+                        <strong>${match.confidence}%</strong>
+                        <small>confidence</small>
+                    </div>
+
                 </div>
 
-                <div class="match-meta">
-                    <span class="row-tier ${match.tier.replace(" ", "-").toLowerCase()}">
-                        ${match.tier}
-                    </span>
 
-                    <span>${match.region || "Global"}</span>
+                <!-- EXPANDED ANALYSIS -->
+
+                <div class="match-analysis">
+
+                    <div class="analysis-header">
+                        <div>
+                            <span>📊</span>
+                            MATCH ANALYSIS
+                        </div>
+
+                        <span class="collapse-text">
+                            Tap to collapse ▲
+                        </span>
+                    </div>
+
+
+                    <div class="prediction-box">
+
+                        <h3>Prediction Insight</h3>
+
+                        <p>
+                            ${match.analysis ||
+                            `${match.home} is currently ranked as a ${match.tier.toLowerCase()} consensus pick.`}
+                        </p>
+
+                    </div>
+
+
+                    <!-- HEAD TO HEAD -->
+
+                    <div class="analysis-section">
+
+                        <h3>🤝 Head to Head</h3>
+
+                        <div class="h2h-grid">
+
+                            <div class="stat-box">
+                                <strong>12</strong>
+                                <span>Total Meetings</span>
+                            </div>
+
+                            <div class="stat-box">
+                                <strong>6</strong>
+                                <span>${match.home} Wins</span>
+                            </div>
+
+                            <div class="stat-box">
+                                <strong>3</strong>
+                                <span>Draws</span>
+                            </div>
+
+                            <div class="stat-box">
+                                <strong>3</strong>
+                                <span>${match.away} Wins</span>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- HOME FORM -->
+
+                    <div class="analysis-section">
+
+                        <h3>
+                            🔵 ${match.home} — Last 10 Games
+                        </h3>
+
+                        <div class="form-row">
+
+                            <span class="form win">W</span>
+                            <span class="form win">W</span>
+                            <span class="form draw">D</span>
+                            <span class="form win">W</span>
+                            <span class="form win">W</span>
+                            <span class="form loss">L</span>
+                            <span class="form win">W</span>
+                            <span class="form draw">D</span>
+                            <span class="form win">W</span>
+                            <span class="form win">W</span>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- AWAY FORM -->
+
+                    <div class="analysis-section">
+
+                        <h3>
+                            🟠 ${match.away} — Last 10 Games
+                        </h3>
+
+                        <div class="form-row">
+
+                            <span class="form loss">L</span>
+                            <span class="form win">W</span>
+                            <span class="form loss">L</span>
+                            <span class="form draw">D</span>
+                            <span class="form win">W</span>
+                            <span class="form loss">L</span>
+                            <span class="form draw">D</span>
+                            <span class="form win">W</span>
+                            <span class="form loss">L</span>
+                            <span class="form win">W</span>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- CONFIDENCE -->
+
+                    <div class="confidence-bar-section">
+
+                        <div class="confidence-label">
+                            <span>Consensus Confidence</span>
+                            <strong>${match.confidence}%</strong>
+                        </div>
+
+                        <div class="progress-bar">
+                            <div
+                                class="progress-fill"
+                                style="width:${match.confidence}%"
+                            ></div>
+                        </div>
+
+                    </div>
+
+
+                    <div class="analysis-note">
+
+                        ⚠️ Analysis is for informational purposes.
+                        Predictions are estimates, not guarantees.
+
+                    </div>
+
                 </div>
-            </div>
 
-            <div class="match-confidence">
-                <strong>${match.confidence}%</strong>
-                <small>confidence</small>
-            </div>
+            </article>
+        `;
 
-            <div class="match-arrow">›</div>
-        </article>
-    `).join("");
-
-    document.querySelectorAll(".match-row").forEach(row => {
-        row.addEventListener("click", () => {
-            openMatch(row.dataset.id);
-        });
-    });
+    }).join("");
 }
 
 
-async function openMatch(id) {
-    modal.classList.remove("hidden");
+/* CLICK MATCH TO EXPAND */
 
-    detail.innerHTML = `
-        <div class="loading">
-            Loading match analysis...
-        </div>
-    `;
+cards.addEventListener("click", (event) => {
 
-    try {
-        const response = await fetch(`/api/matches/${id}`);
+    const matchWrapper =
+        event.target.closest(".match-wrapper");
 
-        if (!response.ok) {
-            throw new Error("Could not load match details");
-        }
+    if (!matchWrapper) return;
 
-        const match = await response.json();
+    const matchId =
+        Number(matchWrapper.dataset.id);
 
-        detail.innerHTML = `
-            <div class="analysis-header">
-                <span class="detail-tier">
-                    ${match.tier}
-                </span>
-
-                <button class="modal-close-inline" onclick="closeMatch()">
-                    ×
-                </button>
-            </div>
-
-            <div class="analysis-teams">
-                <div>
-                    <small>HOME</small>
-                    <h2>${match.home}</h2>
-                </div>
-
-                <div class="analysis-vs">VS</div>
-
-                <div>
-                    <small>AWAY</small>
-                    <h2>${match.away}</h2>
-                </div>
-            </div>
-
-            <div class="confidence-section">
-                <div class="confidence-top">
-                    <span>Prediction Confidence</span>
-                    <strong>${match.confidence}%</strong>
-                </div>
-
-                <div class="confidence-track">
-                    <div
-                        class="confidence-progress"
-                        style="width:${match.confidence}%"
-                    ></div>
-                </div>
-            </div>
-
-            <div class="analysis-stats">
-                <div>
-                    <small>REGION</small>
-                    <strong>${match.region || "Global"}</strong>
-                </div>
-
-                <div>
-                    <small>MATCH DATE</small>
-                    <strong>${match.match_date || "TBA"}</strong>
-                </div>
-            </div>
-
-            <section class="analysis-section">
-                <h3>🧠 Sure Wins Analysis</h3>
-                <p>
-                    ${match.analysis || "Detailed analysis coming soon."}
-                </p>
-            </section>
-
-            <div class="coming-next">
-                <div>📊 Head-to-Head Statistics</div>
-                <small>
-                    Historical meetings and results — Phase B
-                </small>
-            </div>
-
-            <div class="coming-next">
-                <div>📈 Last 10 Games Form</div>
-                <small>
-                    Recent wins, draws, losses and performance — Phase B
-                </small>
-            </div>
-        `;
-
-    } catch (error) {
-        console.error(error);
-
-        detail.innerHTML = `
-            <div class="error-message">
-                Unable to load match analysis.
-            </div>
-        `;
+    if (expandedMatchId === matchId) {
+        expandedMatchId = null;
+    } else {
+        expandedMatchId = matchId;
     }
-}
+
+    renderMatches();
+});
 
 
-function closeMatch() {
-    modal.classList.add("hidden");
-}
-
+/* FILTER BUTTONS */
 
 filters.forEach(button => {
+
     button.addEventListener("click", () => {
-        filters.forEach(btn => {
-            btn.classList.remove("active");
-        });
+
+        filters.forEach(btn =>
+            btn.classList.remove("active")
+        );
 
         button.classList.add("active");
 
         currentTier = button.dataset.tier;
+
+        expandedMatchId = null;
+
         renderMatches();
+
     });
+
 });
 
 
-search.addEventListener("input", renderMatches);
+/* SEARCH */
 
+search.addEventListener("input", () => {
 
-refreshBtn.addEventListener("click", loadMatches);
+    expandedMatchId = null;
 
+    renderMatches();
 
-closeModal.addEventListener("click", closeMatch);
-
-
-modal.addEventListener("click", event => {
-    if (event.target === modal) {
-        closeMatch();
-    }
 });
 
+
+/* REFRESH */
+
+refreshBtn.addEventListener("click", () => {
+
+    expandedMatchId = null;
+
+    loadMatches();
+
+});
+
+
+/* INITIAL LOAD */
 
 loadMatches();
