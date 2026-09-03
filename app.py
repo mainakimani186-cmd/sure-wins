@@ -1,5 +1,6 @@
 import os
-from datetime import datetime, date
+import time
+from datetime import datetime, date, timedelta
 from functools import wraps
 
 import requests
@@ -66,20 +67,108 @@ class Match(db.Model):
 
 
 # ==================================================
-# API CONFIG
+# FOOTBALL-DATA.ORG CONFIG
 # ==================================================
 
-API_BASE_URL = "https://v3.football.api-sports.io"
+API_BASE_URL = "https://api.football-data.org/v4"
 
 session = requests.Session()
 
 
 # ==================================================
-# MEMORY CACHE
+# CACHE
 # ==================================================
 
 team_cache = {}
 analysis_cache = {}
+
+# Cache API responses to protect free API limit
+api_cache = {}
+
+# Cache lifetime in seconds
+CACHE_TTL = 3600
+
+
+# ==================================================
+# TEAM NAME ALIASES
+# ==================================================
+
+TEAM_ALIASES = {
+    "barcelona": [
+        "FC Barcelona",
+        "Barcelona"
+    ],
+
+    "manchester city": [
+        "Manchester City FC",
+        "Manchester City"
+    ],
+
+    "coventry city": [
+        "Coventry City FC",
+        "Coventry City"
+    ],
+
+    "rb leipzig": [
+        "RB Leipzig"
+    ],
+
+    "werder bremen": [
+        "SV Werder Bremen",
+        "Werder Bremen"
+    ],
+
+    "atlético madrid": [
+        "Atlético de Madrid",
+        "Atletico Madrid",
+        "Atlético Madrid"
+    ],
+
+    "athletic bilbao": [
+        "Athletic Club",
+        "Athletic Bilbao"
+    ],
+
+    "inter miami": [
+        "Inter Miami CF",
+        "Inter Miami"
+    ],
+
+    "atlanta united": [
+        "Atlanta United FC",
+        "Atlanta United"
+    ],
+
+    "brentford": [
+        "Brentford FC",
+        "Brentford"
+    ],
+
+    "fulham": [
+        "Fulham FC",
+        "Fulham"
+    ],
+
+    "crystal palace": [
+        "Crystal Palace FC",
+        "Crystal Palace"
+    ],
+
+    "newcastle united": [
+        "Newcastle United FC",
+        "Newcastle United"
+    ],
+
+    "bournemouth": [
+        "AFC Bournemouth",
+        "Bournemouth"
+    ],
+
+    "valencia": [
+        "Valencia CF",
+        "Valencia"
+    ]
+}
 
 
 # ==================================================
@@ -88,15 +177,31 @@ analysis_cache = {}
 
 def football_api(endpoint, params=None):
 
-    api_key = os.getenv("API_FOOTBALL_KEY")
+    api_key = os.getenv("FOOTBALL_DATA_API_KEY")
 
     if not api_key:
         raise RuntimeError(
-            "API_FOOTBALL_KEY environment variable is missing"
+            "FOOTBALL_DATA_API_KEY environment variable is missing"
         )
 
+    params = params or {}
+
+    cache_key = (
+        endpoint,
+        tuple(sorted(params.items()))
+    )
+
+    # Return cached response
+    if cache_key in api_cache:
+
+        cached = api_cache[cache_key]
+
+        if time.time() - cached["time"] < CACHE_TTL:
+            print("CACHE HIT:", endpoint)
+            return cached["data"]
+
     headers = {
-        "x-apisports-key": api_key,
+        "X-Auth-Token": api_key,
         "Accept": "application/json"
     }
 
@@ -105,33 +210,134 @@ def football_api(endpoint, params=None):
         response = session.get(
             f"{API_BASE_URL}{endpoint}",
             headers=headers,
-            params=params or {},
-            timeout=20
+            params=params,
+            timeout=25
         )
 
         print(
-            "API REQUEST:",
+            "FOOTBALL-DATA REQUEST:",
             endpoint,
             params,
             "STATUS:",
             response.status_code
         )
 
-        response.raise_for_status()
+        if not response.ok:
+
+            try:
+                error_data = response.json()
+            except Exception:
+                error_data = response.text
+
+            raise RuntimeError(
+                f"Football-data API error "
+                f"({response.status_code}): "
+                f"{error_data}"
+            )
 
         data = response.json()
 
-        if data.get("errors"):
-            raise RuntimeError(
-                f"API-Football error: {data['errors']}"
-            )
+        api_cache[cache_key] = {
+            "data": data,
+            "time": time.time()
+        }
 
-        return data.get("response", [])
+        return data
 
     except requests.RequestException as e:
+
         raise RuntimeError(
-            f"HTTP/API request failed: {str(e)}"
+            f"HTTP request failed: {str(e)}"
         )
+
+
+# ==================================================
+# NORMALIZE TEAM NAME
+# ==================================================
+
+def normalize_name(name):
+
+    if not name:
+        return ""
+
+    replacements = {
+        "á": "a",
+        "à": "a",
+        "ä": "a",
+        "â": "a",
+        "é": "e",
+        "è": "e",
+        "ë": "e",
+        "í": "i",
+        "ï": "i",
+        "ó": "o",
+        "ö": "o",
+        "ú": "u",
+        "ü": "u",
+        "ñ": "n"
+    }
+
+    value = name.lower().strip()
+
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+
+    value = value.replace(" fc", "")
+    value = value.replace(" cf", "")
+    value = value.replace(" afc", "")
+    value = value.replace(".", "")
+    value = value.replace("-", " ")
+
+    return " ".join(value.split())
+
+
+# ==================================================
+# LOAD TEAM CATALOG
+# ==================================================
+
+def get_all_teams():
+
+    cache_key = "__ALL_TEAMS__"
+
+    if cache_key in team_cache:
+        return team_cache[cache_key]
+
+    teams = []
+    offset = 0
+    limit = 100
+
+    # We load a reasonable catalog once
+    # and cache it in memory.
+    for _ in range(10):
+
+        data = football_api(
+            "/teams",
+            {
+                "limit": limit,
+                "offset": offset
+            }
+        )
+
+        batch = data.get("teams", [])
+
+        if not batch:
+            break
+
+        teams.extend(batch)
+
+        if len(batch) < limit:
+            break
+
+        offset += limit
+
+    team_cache[cache_key] = teams
+
+    print(
+        "TEAM CATALOG LOADED:",
+        len(teams)
+    )
+
+    return teams
 
 
 # ==================================================
@@ -140,110 +346,190 @@ def football_api(endpoint, params=None):
 
 def find_team(team_name):
 
-    cache_key = team_name.lower().strip()
+    cache_key = normalize_name(team_name)
 
     if cache_key in team_cache:
         return team_cache[cache_key]
 
-    teams = football_api(
-        "/teams",
-        {
-            "search": team_name
-        }
+    aliases = TEAM_ALIASES.get(
+        team_name.lower(),
+        [team_name]
     )
 
-    if not teams:
-        print("TEAM NOT FOUND:", team_name)
-        return None
+    normalized_aliases = [
+        normalize_name(x)
+        for x in aliases
+    ]
 
-    normalized = team_name.lower().strip()
+    teams = get_all_teams()
 
-    # Exact match first
-    for item in teams:
+    # EXACT MATCH
+    for team in teams:
 
-        team = item.get("team", {})
+        team_name_api = team.get("name", "")
+        normalized_api = normalize_name(
+            team_name_api
+        )
 
-        name = team.get("name", "")
-
-        if name.lower().strip() == normalized:
+        if normalized_api in normalized_aliases:
 
             result = {
                 "id": team.get("id"),
-                "name": name
+                "name": team_name_api,
+                "shortName": team.get(
+                    "shortName",
+                    team_name_api
+                ),
+                "crest": team.get("crest")
             }
 
             team_cache[cache_key] = result
 
             print(
-                "EXACT TEAM FOUND:",
+                "TEAM FOUND:",
                 team_name,
+                "=>",
                 result
             )
 
             return result
 
-    # Fallback first result
-    team = teams[0].get("team", {})
+    # PARTIAL MATCH
+    for team in teams:
 
-    result = {
-        "id": team.get("id"),
-        "name": team.get("name")
-    }
+        team_name_api = team.get("name", "")
+        normalized_api = normalize_name(
+            team_name_api
+        )
 
-    team_cache[cache_key] = result
+        for alias in normalized_aliases:
 
-    print(
-        "FALLBACK TEAM FOUND:",
-        team_name,
-        result
-    )
+            if (
+                alias in normalized_api
+                or normalized_api in alias
+            ):
 
-    return result
+                result = {
+                    "id": team.get("id"),
+                    "name": team_name_api,
+                    "shortName": team.get(
+                        "shortName",
+                        team_name_api
+                    ),
+                    "crest": team.get("crest")
+                }
+
+                team_cache[cache_key] = result
+
+                print(
+                    "PARTIAL TEAM FOUND:",
+                    team_name,
+                    "=>",
+                    result
+                )
+
+                return result
+
+    print("TEAM NOT FOUND:", team_name)
+
+    return None
 
 
 # ==================================================
-# TEAM LAST GAMES
+# GET TEAM MATCHES
+# ==================================================
+
+def get_team_matches(team_id):
+
+    today = date.today()
+
+    # Go back roughly 18 months
+    date_from = today - timedelta(days=550)
+
+    data = football_api(
+        f"/teams/{team_id}/matches",
+        {
+            "dateFrom": date_from.isoformat(),
+            "dateTo": today.isoformat(),
+            "status": "FINISHED",
+            "limit": 100
+        }
+    )
+
+    return data.get("matches", [])
+
+
+# ==================================================
+# TEAM LAST 10 GAMES
 # ==================================================
 
 def get_team_last_games(team_id, limit=10):
 
-    fixtures = football_api(
-        "/fixtures",
-        {
-            "team": team_id,
-            "last": limit,
-            "status": "FT-AET-PEN"
-        }
+    matches = get_team_matches(team_id)
+
+    matches = sorted(
+        matches,
+        key=lambda x: x.get(
+            "utcDate",
+            ""
+        ),
+        reverse=True
     )
 
     games = []
 
-    for fixture in fixtures:
+    for match in matches:
 
-        teams = fixture.get("teams", {})
-        goals = fixture.get("goals", {})
-        fixture_info = fixture.get("fixture", {})
+        home = match.get(
+            "homeTeam",
+            {}
+        )
 
-        home = teams.get("home", {})
-        away = teams.get("away", {})
+        away = match.get(
+            "awayTeam",
+            {}
+        )
 
-        home_goals = goals.get("home")
-        away_goals = goals.get("away")
+        score = match.get(
+            "score",
+            {}
+        )
 
-        if home_goals is None or away_goals is None:
+        full_time = score.get(
+            "fullTime",
+            {}
+        )
+
+        home_goals = full_time.get("home")
+        away_goals = full_time.get("away")
+
+        if (
+            home_goals is None
+            or away_goals is None
+        ):
             continue
 
-        is_home = home.get("id") == team_id
+        is_home = (
+            home.get("id") == team_id
+        )
 
         if is_home:
 
-            opponent = away.get("name", "")
+            opponent = away.get(
+                "name",
+                ""
+            )
+
             team_goals = home_goals
             opponent_goals = away_goals
 
         else:
 
-            opponent = home.get("name", "")
+            opponent = home.get(
+                "name",
+                ""
+            )
+
             team_goals = away_goals
             opponent_goals = home_goals
 
@@ -257,15 +543,27 @@ def get_team_last_games(team_id, limit=10):
             result = "D"
 
         games.append({
+
             "result": result,
+
             "opponent": opponent,
-            "score": f"{team_goals}-{opponent_goals}",
-            "date": fixture_info.get(
-                "date",
-                ""
-            )[:10],
+
+            "score": (
+                f"{team_goals}-{opponent_goals}"
+            ),
+
+            "date": (
+                match.get(
+                    "utcDate",
+                    ""
+                )[:10]
+            ),
+
             "home": is_home
         })
+
+        if len(games) >= limit:
+            break
 
     return games
 
@@ -274,18 +572,14 @@ def get_team_last_games(team_id, limit=10):
 # HEAD TO HEAD
 # ==================================================
 
-def get_head_to_head(home_team, away_team):
+def get_head_to_head(
+    home_team,
+    away_team
+):
 
-    fixtures = football_api(
-        "/fixtures/headtohead",
-        {
-            "h2h": (
-                f"{home_team['id']}"
-                f"-{away_team['id']}"
-            ),
-            "last": 20,
-            "status": "FT-AET-PEN"
-        }
+    # Get historical matches for home team
+    matches = get_team_matches(
+        home_team["id"]
     )
 
     total = 0
@@ -295,19 +589,42 @@ def get_head_to_head(home_team, away_team):
 
     recent = []
 
-    for fixture in fixtures:
+    for match in matches:
 
-        teams = fixture.get("teams", {})
-        goals = fixture.get("goals", {})
-        fixture_info = fixture.get("fixture", {})
+        fixture_home = match.get(
+            "homeTeam",
+            {}
+        )
 
-        fixture_home = teams.get("home", {})
-        fixture_away = teams.get("away", {})
+        fixture_away = match.get(
+            "awayTeam",
+            {}
+        )
 
-        home_goals = goals.get("home")
-        away_goals = goals.get("away")
+        # Check if both teams participated
+        team_ids = {
+            fixture_home.get("id"),
+            fixture_away.get("id")
+        }
 
-        if home_goals is None or away_goals is None:
+        if (
+            home_team["id"] not in team_ids
+            or away_team["id"] not in team_ids
+        ):
+            continue
+
+        full_time = (
+            match.get("score", {})
+            .get("fullTime", {})
+        )
+
+        home_goals = full_time.get("home")
+        away_goals = full_time.get("away")
+
+        if (
+            home_goals is None
+            or away_goals is None
+        ):
             continue
 
         total += 1
@@ -318,12 +635,12 @@ def get_head_to_head(home_team, away_team):
 
         else:
 
-            home_team_was_home = (
+            requested_home_is_home = (
                 fixture_home.get("id")
                 == home_team["id"]
             )
 
-            if home_team_was_home:
+            if requested_home_is_home:
 
                 if home_goals > away_goals:
                     home_wins += 1
@@ -338,20 +655,43 @@ def get_head_to_head(home_team, away_team):
                     away_wins += 1
 
         recent.append({
-            "home": fixture_home.get("name"),
-            "away": fixture_away.get("name"),
-            "score": f"{home_goals}-{away_goals}",
-            "date": fixture_info.get(
-                "date",
-                ""
-            )[:10]
+
+            "home": fixture_home.get(
+                "name"
+            ),
+
+            "away": fixture_away.get(
+                "name"
+            ),
+
+            "score": (
+                f"{home_goals}-{away_goals}"
+            ),
+
+            "date": (
+                match.get(
+                    "utcDate",
+                    ""
+                )[:10]
+            )
         })
 
+    recent = sorted(
+        recent,
+        key=lambda x: x["date"],
+        reverse=True
+    )
+
     return {
+
         "total": total,
+
         "home_wins": home_wins,
+
         "draws": draws,
+
         "away_wins": away_wins,
+
         "recent": recent[:5]
     }
 
@@ -363,11 +703,17 @@ def get_head_to_head(home_team, away_team):
 def serialize(m):
 
     return {
+
         "id": m.id,
+
         "home": m.home,
+
         "away": m.away,
+
         "confidence": m.confidence,
+
         "tier": m.tier,
+
         "region": m.region,
 
         "match_date": (
@@ -404,7 +750,9 @@ def create_app():
         "sqlite:///surewins.db"
     )
 
-    if database_url.startswith("postgres://"):
+    if database_url.startswith(
+        "postgres://"
+    ):
 
         database_url = database_url.replace(
             "postgres://",
@@ -438,17 +786,21 @@ def create_app():
             for h, a, p, t, r in SEED:
 
                 db.session.add(
+
                     Match(
+
                         home=h,
                         away=a,
                         confidence=p,
                         tier=t,
                         region=r,
                         match_date=date.today(),
+
                         analysis=(
                             f"{h} is currently ranked as "
                             f"a {t.lower()} consensus pick."
                         ),
+
                         updated_at=now
                     )
                 )
@@ -469,7 +821,9 @@ def create_app():
                 request.headers.get(
                     "X-Admin-Token"
                 )
-                or request.args.get("token")
+                or request.args.get(
+                    "token"
+                )
             )
 
             expected = os.getenv(
@@ -485,7 +839,10 @@ def create_app():
                     "error": "Unauthorized"
                 }), 401
 
-            return fn(*args, **kwargs)
+            return fn(
+                *args,
+                **kwargs
+            )
 
         return wrapper
 
@@ -510,12 +867,23 @@ def create_app():
     def health():
 
         return jsonify({
+
             "status": "ok",
+
             "service": "sure-wins",
+
+            "provider": "football-data.org",
+
             "api_key_configured": bool(
-                os.getenv("API_FOOTBALL_KEY")
+                os.getenv(
+                    "FOOTBALL_DATA_API_KEY"
+                )
             ),
-            "time": datetime.utcnow().isoformat()
+
+            "time": (
+                datetime.utcnow()
+                .isoformat()
+            )
         })
 
 
@@ -526,11 +894,16 @@ def create_app():
     @app.get("/api/matches")
     def matches():
 
-        tier = request.args.get("tier")
+        tier = request.args.get(
+            "tier"
+        )
 
         q = Match.query
 
-        if tier and tier != "ALL":
+        if (
+            tier
+            and tier != "ALL"
+        ):
 
             q = q.filter_by(
                 tier=tier
@@ -542,10 +915,12 @@ def create_app():
         ).all()
 
         return jsonify({
+
             "matches": [
                 serialize(x)
                 for x in rows
             ],
+
             "updated": (
                 datetime.utcnow()
                 .isoformat()
@@ -585,7 +960,7 @@ def create_app():
     )
     def match_analysis(match_id):
 
-        # Return cached analysis
+        # Cached result
         if match_id in analysis_cache:
 
             print(
@@ -606,7 +981,10 @@ def create_app():
         if not match:
 
             return jsonify({
-                "error": "Match not found"
+
+                "error":
+                    "Match not found"
+
             }), 404
 
 
@@ -633,30 +1011,44 @@ def create_app():
             if not home_team:
 
                 return jsonify({
+
+                    "ok": False,
+
                     "error": (
-                        f"Home team not found: "
+                        f"Home team not found "
+                        f"in football-data.org: "
                         f"{match.home}"
                     )
+
                 }), 404
 
 
             if not away_team:
 
                 return jsonify({
+
+                    "ok": False,
+
                     "error": (
-                        f"Away team not found: "
+                        f"Away team not found "
+                        f"in football-data.org: "
                         f"{match.away}"
                     )
+
                 }), 404
 
 
             # Get forms
-            home_form = get_team_last_games(
-                home_team["id"]
+            home_form = (
+                get_team_last_games(
+                    home_team["id"]
+                )
             )
 
-            away_form = get_team_last_games(
-                away_team["id"]
+            away_form = (
+                get_team_last_games(
+                    away_team["id"]
+                )
             )
 
 
@@ -671,10 +1063,14 @@ def create_app():
 
                 "ok": True,
 
-                "match": serialize(match),
+                "match": serialize(
+                    match
+                ),
 
                 "teams": {
+
                     "home": home_team,
+
                     "away": away_team
                 },
 
@@ -684,7 +1080,9 @@ def create_app():
 
                 "away_form": away_form,
 
-                "source": "API-Football",
+                "source": (
+                    "football-data.org"
+                ),
 
                 "updated": (
                     datetime.utcnow()
@@ -705,7 +1103,9 @@ def create_app():
             )
 
 
-            return jsonify(result)
+            return jsonify(
+                result
+            )
 
 
         except Exception as error:
@@ -743,18 +1143,26 @@ def create_app():
         now = datetime.utcnow()
 
         Match.query.update({
+
             Match.updated_at: now
         })
 
         db.session.commit()
 
-        # Clear analysis cache
+        # Clear caches
         analysis_cache.clear()
+        team_cache.clear()
+        api_cache.clear()
 
         return jsonify({
+
             "ok": True,
-            "message": "Refresh complete",
-            "updated": now.isoformat()
+
+            "message":
+                "Refresh complete",
+
+            "updated":
+                now.isoformat()
         })
 
 
@@ -771,7 +1179,9 @@ app = create_app()
 if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=int(
             os.getenv(
                 "PORT",
