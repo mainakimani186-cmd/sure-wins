@@ -1,88 +1,113 @@
-const grid = document.getElementById("grid");
+const cards = document.getElementById("cards");
 const count = document.getElementById("count");
+const updated = document.getElementById("updated");
+const search = document.getElementById("search");
+const refreshBtn = document.getElementById("refresh");
 const filters = document.querySelectorAll("#filters button");
 
-let matches = [];
+let allMatches = [];
+let currentTier = "ALL";
 
-async function loadMatches(tier = "ALL") {
-  try {
-    let url = "/api/matches";
+async function loadMatches() {
+    cards.innerHTML = '<p style="color:#aaa;padding:20px;">Loading matches...</p>';
 
-    if (tier !== "ALL") {
-      url += `?tier=${tier}`;
+    try {
+        const response = await fetch("/api/matches?ts=" + Date.now());
+
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        console.log("API DATA:", data);
+
+        allMatches = data.matches || [];
+
+        count.textContent = allMatches.length;
+
+        if (data.updated) {
+            updated.textContent = new Date(data.updated).toLocaleTimeString();
+        }
+
+        renderMatches();
+
+    } catch (error) {
+        console.error("Failed to load matches:", error);
+
+        cards.innerHTML = `
+            <div style="padding:20px;color:#ff6b6b;">
+                Failed to load matches.<br>
+                <small>${error.message}</small>
+            </div>
+        `;
+    }
+}
+
+function renderMatches() {
+    const query = search.value.toLowerCase();
+
+    const filtered = allMatches.filter(match => {
+        const matchesTier =
+            currentTier === "ALL" || match.tier === currentTier;
+
+        const matchesSearch =
+            match.home.toLowerCase().includes(query) ||
+            match.away.toLowerCase().includes(query);
+
+        return matchesTier && matchesSearch;
+    });
+
+    if (filtered.length === 0) {
+        cards.innerHTML = `
+            <div style="padding:20px;color:#aaa;">
+                No matches found.
+            </div>
+        `;
+        return;
     }
 
-    const response = await fetch(url);
-    const data = await response.json();
+    cards.innerHTML = filtered.map(match => `
+        <article class="card">
+            <div class="card-top">
+                <span class="tier ${match.tier.replace(" ", "-").toLowerCase()}">
+                    ${match.tier}
+                </span>
+                <span class="confidence">${match.confidence}%</span>
+            </div>
 
-    matches = data.matches || [];
-    renderMatches(matches);
+            <div class="teams">
+                <div>${match.home}</div>
+                <div class="vs">VS</div>
+                <div>${match.away}</div>
+            </div>
 
-  } catch (error) {
-    console.error("Error loading matches:", error);
+            <div class="card-footer">
+                <span>${match.region || "Global"}</span>
+                <span>${match.match_date || ""}</span>
+            </div>
 
-    grid.innerHTML = `
-      <div class="card">
-        <h3>Unable to load matches</h3>
-        <p>Please try again later.</p>
-      </div>
-    `;
-  }
-}
-
-function renderMatches(items) {
-  count.textContent = items.length;
-
-  if (!items.length) {
-    grid.innerHTML = `
-      <div class="card">
-        <h3>No matches available</h3>
-        <p>Check back later for updated predictions.</p>
-      </div>
-    `;
-    return;
-  }
-
-  grid.innerHTML = items.map(match => `
-    <article class="card">
-      <div class="card-top">
-        <span class="tier">${match.tier}</span>
-        <span class="confidence">${match.confidence}%</span>
-      </div>
-
-      <h3>${match.home} vs ${match.away}</h3>
-      <p class="region">${match.region}</p>
-
-      <button onclick="showMatch(${match.id})">
-        View Analysis
-      </button>
-    </article>
-  `).join("");
-}
-
-async function showMatch(id) {
-  try {
-    const response = await fetch(`/api/matches/${id}`);
-    const match = await response.json();
-
-    alert(
-      `${match.home} vs ${match.away}\n\n` +
-      `Confidence: ${match.confidence}%\n` +
-      `Tier: ${match.tier}\n\n` +
-      `${match.analysis || "Analysis coming soon."}`
-    );
-
-  } catch (error) {
-    console.error(error);
-  }
+            <p class="analysis">
+                ${match.analysis || ""}
+            </p>
+        </article>
+    `).join("");
 }
 
 filters.forEach(button => {
-  button.addEventListener("click", () => {
-    filters.forEach(btn => btn.classList.remove("active"));
-    button.classList.add("active");
-    loadMatches(button.dataset.tier);
-  });
+    button.addEventListener("click", () => {
+        filters.forEach(btn => btn.classList.remove("active"));
+        button.classList.add("active");
+
+        currentTier = button.dataset.tier;
+        renderMatches();
+    });
+});
+
+search.addEventListener("input", renderMatches);
+
+refreshBtn.addEventListener("click", () => {
+    loadMatches();
 });
 
 loadMatches();
