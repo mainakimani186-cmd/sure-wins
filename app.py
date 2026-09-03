@@ -1,5 +1,4 @@
 import os
-import logging
 from datetime import datetime, date
 from functools import wraps
 
@@ -9,23 +8,12 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import desc
 
 
-# --------------------------------------------------
-# SETUP
-# --------------------------------------------------
-
-logging.basicConfig(level=logging.INFO)
-
 db = SQLAlchemy()
 
-API_BASE_URL = "https://v3.football.api-sports.io"
 
-TEAM_CACHE = {}
-ANALYSIS_CACHE = {}
-
-
-# --------------------------------------------------
-# DEMO / INITIAL MATCH PICKS
-# --------------------------------------------------
+# ==================================================
+# SEED DATA
+# ==================================================
 
 SEED = [
     ("Barcelona", "Valencia", 86, "Very High", "Global"),
@@ -51,31 +39,9 @@ SEED = [
 ]
 
 
-# --------------------------------------------------
-# TEAM NAME ALIASES
-# --------------------------------------------------
-
-TEAM_ALIASES = {
-    "Barcelona": "Barcelona",
-    "Manchester City": "Manchester City",
-    "RB Leipzig": "RB Leipzig",
-    "Inter Miami": "Inter Miami",
-    "Atlético Madrid": "Atletico Madrid",
-    "Athletic Bilbao": "Athletic Club",
-    "Philadelphia Union": "Philadelphia Union",
-    "CF Montréal": "Montreal",
-    "Vancouver Whitecaps": "Vancouver Whitecaps",
-    "St. Louis City": "St. Louis City",
-    "FC Cincinnati": "FC Cincinnati",
-    "DC United": "DC United",
-    "Club América": "America",
-    "Tigres UANL": "Tigres",
-}
-
-
-# --------------------------------------------------
+# ==================================================
 # DATABASE MODEL
-# --------------------------------------------------
+# ==================================================
 
 class Match(db.Model):
 
@@ -99,9 +65,26 @@ class Match(db.Model):
     )
 
 
-# --------------------------------------------------
-# API FOOTBALL REQUEST
-# --------------------------------------------------
+# ==================================================
+# API CONFIG
+# ==================================================
+
+API_BASE_URL = "https://v3.football.api-sports.io"
+
+session = requests.Session()
+
+
+# ==================================================
+# MEMORY CACHE
+# ==================================================
+
+team_cache = {}
+analysis_cache = {}
+
+
+# ==================================================
+# API REQUEST
+# ==================================================
 
 def football_api(endpoint, params=None):
 
@@ -117,184 +100,110 @@ def football_api(endpoint, params=None):
         "Accept": "application/json"
     }
 
-    url = f"{API_BASE_URL}{endpoint}"
-
-    logging.info(
-        "API request: %s params=%s",
-        endpoint,
-        params
-    )
-
     try:
 
-        response = requests.get(
-            url,
+        response = session.get(
+            f"{API_BASE_URL}{endpoint}",
             headers=headers,
             params=params or {},
             timeout=20
         )
 
-    except requests.RequestException as e:
-
-        logging.exception("API connection error")
-
-        raise RuntimeError(
-            f"Could not connect to API-Football: {str(e)}"
+        print(
+            "API REQUEST:",
+            endpoint,
+            params,
+            "STATUS:",
+            response.status_code
         )
 
+        response.raise_for_status()
 
-    logging.info(
-        "API response status: %s",
-        response.status_code
-    )
-
-
-    try:
         data = response.json()
 
-    except ValueError:
+        if data.get("errors"):
+            raise RuntimeError(
+                f"API-Football error: {data['errors']}"
+            )
 
-        logging.error(
-            "Invalid JSON from API: %s",
-            response.text[:500]
-        )
+        return data.get("response", [])
 
+    except requests.RequestException as e:
         raise RuntimeError(
-            f"API returned invalid JSON (HTTP {response.status_code})"
+            f"HTTP/API request failed: {str(e)}"
         )
 
 
-    if response.status_code != 200:
-
-        logging.error(
-            "API HTTP error: %s",
-            data
-        )
-
-        raise RuntimeError(
-            f"API HTTP {response.status_code}: "
-            f"{data.get('message') or data.get('errors') or data}"
-        )
-
-
-    errors = data.get("errors")
-
-    if errors:
-
-        logging.error(
-            "API-Football errors: %s",
-            errors
-        )
-
-        raise RuntimeError(
-            f"API-Football error: {errors}"
-        )
-
-
-    result = data.get("response")
-
-    if result is None:
-        result = []
-
-    logging.info(
-        "API returned %s results",
-        len(result) if isinstance(result, list) else "unknown"
-    )
-
-    return result
-
-
-# --------------------------------------------------
+# ==================================================
 # FIND TEAM
-# --------------------------------------------------
+# ==================================================
 
 def find_team(team_name):
 
-    if team_name in TEAM_CACHE:
-        return TEAM_CACHE[team_name]
+    cache_key = team_name.lower().strip()
 
-
-    search_name = TEAM_ALIASES.get(
-        team_name,
-        team_name
-    )
-
+    if cache_key in team_cache:
+        return team_cache[cache_key]
 
     teams = football_api(
         "/teams",
         {
-            "search": search_name
+            "search": team_name
         }
     )
 
-
     if not teams:
-
-        logging.warning(
-            "No team found for: %s",
-            team_name
-        )
-
+        print("TEAM NOT FOUND:", team_name)
         return None
 
+    normalized = team_name.lower().strip()
 
-    normalized_original = team_name.lower().strip()
-    normalized_search = search_name.lower().strip()
-
-
-    # Exact match priority
+    # Exact match first
     for item in teams:
 
         team = item.get("team", {})
 
-        api_name = team.get(
-            "name",
-            ""
-        ).lower().strip()
+        name = team.get("name", "")
 
-        if api_name == normalized_original:
+        if name.lower().strip() == normalized:
 
             result = {
                 "id": team.get("id"),
-                "name": team.get("name"),
-                "logo": team.get("logo")
+                "name": name
             }
 
-            TEAM_CACHE[team_name] = result
+            team_cache[cache_key] = result
+
+            print(
+                "EXACT TEAM FOUND:",
+                team_name,
+                result
+            )
 
             return result
 
-
-        if api_name == normalized_search:
-
-            result = {
-                "id": team.get("id"),
-                "name": team.get("name"),
-                "logo": team.get("logo")
-            }
-
-            TEAM_CACHE[team_name] = result
-
-            return result
-
-
-    # First result fallback
+    # Fallback first result
     team = teams[0].get("team", {})
 
     result = {
         "id": team.get("id"),
-        "name": team.get("name"),
-        "logo": team.get("logo")
+        "name": team.get("name")
     }
 
-    TEAM_CACHE[team_name] = result
+    team_cache[cache_key] = result
+
+    print(
+        "FALLBACK TEAM FOUND:",
+        team_name,
+        result
+    )
 
     return result
 
 
-# --------------------------------------------------
-# GET TEAM LAST GAMES
-# --------------------------------------------------
+# ==================================================
+# TEAM LAST GAMES
+# ==================================================
 
 def get_team_last_games(team_id, limit=10):
 
@@ -302,77 +211,41 @@ def get_team_last_games(team_id, limit=10):
         "/fixtures",
         {
             "team": team_id,
-            "last": limit
+            "last": limit,
+            "status": "FT-AET-PEN"
         }
     )
 
-
     games = []
-
 
     for fixture in fixtures:
 
-        fixture_info = fixture.get(
-            "fixture",
-            {}
-        )
+        teams = fixture.get("teams", {})
+        goals = fixture.get("goals", {})
+        fixture_info = fixture.get("fixture", {})
 
-        status = fixture_info.get(
-            "status",
-            {}
-        ).get("short")
-
-
-        # Only completed games
-        if status not in ["FT", "AET", "PEN"]:
-            continue
-
-
-        teams = fixture.get(
-            "teams",
-            {}
-        )
-
-        goals = fixture.get(
-            "goals",
-            {}
-        )
-
-
-        home = teams.get(
-            "home",
-            {}
-        )
-
-        away = teams.get(
-            "away",
-            {}
-        )
-
+        home = teams.get("home", {})
+        away = teams.get("away", {})
 
         home_goals = goals.get("home")
         away_goals = goals.get("away")
 
-
         if home_goals is None or away_goals is None:
             continue
 
-
         is_home = home.get("id") == team_id
-
 
         if is_home:
 
+            opponent = away.get("name", "")
             team_goals = home_goals
             opponent_goals = away_goals
-            opponent = away.get("name")
 
         else:
 
+            opponent = home.get("name", "")
             team_goals = away_goals
             opponent_goals = home_goals
-            opponent = home.get("name")
-
 
         if team_goals > opponent_goals:
             result = "W"
@@ -382,7 +255,6 @@ def get_team_last_games(team_id, limit=10):
 
         else:
             result = "D"
-
 
         games.append({
             "result": result,
@@ -395,29 +267,26 @@ def get_team_last_games(team_id, limit=10):
             "home": is_home
         })
 
-
-        if len(games) >= limit:
-            break
-
-
     return games
 
 
-# --------------------------------------------------
+# ==================================================
 # HEAD TO HEAD
-# --------------------------------------------------
+# ==================================================
 
 def get_head_to_head(home_team, away_team):
 
     fixtures = football_api(
         "/fixtures/headtohead",
         {
-            "h2h":
-                f"{home_team['id']}-{away_team['id']}",
-            "last": 20
+            "h2h": (
+                f"{home_team['id']}"
+                f"-{away_team['id']}"
+            ),
+            "last": 20,
+            "status": "FT-AET-PEN"
         }
     )
-
 
     total = 0
     home_wins = 0
@@ -426,77 +295,47 @@ def get_head_to_head(home_team, away_team):
 
     recent = []
 
-
     for fixture in fixtures:
 
-        fixture_info = fixture.get(
-            "fixture",
-            {}
-        )
+        teams = fixture.get("teams", {})
+        goals = fixture.get("goals", {})
+        fixture_info = fixture.get("fixture", {})
 
-        status = fixture_info.get(
-            "status",
-            {}
-        ).get("short")
-
-
-        if status not in ["FT", "AET", "PEN"]:
-            continue
-
-
-        teams = fixture.get(
-            "teams",
-            {}
-        )
-
-        goals = fixture.get(
-            "goals",
-            {}
-        )
-
-
-        fixture_home = teams.get(
-            "home",
-            {}
-        )
-
-        fixture_away = teams.get(
-            "away",
-            {}
-        )
-
+        fixture_home = teams.get("home", {})
+        fixture_away = teams.get("away", {})
 
         home_goals = goals.get("home")
         away_goals = goals.get("away")
 
-
         if home_goals is None or away_goals is None:
             continue
 
-
         total += 1
-
 
         if home_goals == away_goals:
 
             draws += 1
 
+        else:
 
-        elif fixture_home.get("id") == home_team["id"]:
+            home_team_was_home = (
+                fixture_home.get("id")
+                == home_team["id"]
+            )
 
-            if home_goals > away_goals:
-                home_wins += 1
+            if home_team_was_home:
+
+                if home_goals > away_goals:
+                    home_wins += 1
+                else:
+                    away_wins += 1
+
             else:
-                away_wins += 1
 
-
-        elif fixture_away.get("id") == home_team["id"]:
-
-            if away_goals > home_goals:
-                home_wins += 1
-            else:
-                away_wins += 1
-
+                if away_goals > home_goals:
+                    home_wins += 1
+                else:
+                    away_wins += 1
 
         recent.append({
             "home": fixture_home.get("name"),
@@ -508,7 +347,6 @@ def get_head_to_head(home_team, away_team):
             )[:10]
         })
 
-
     return {
         "total": total,
         "home_wins": home_wins,
@@ -518,9 +356,9 @@ def get_head_to_head(home_team, away_team):
     }
 
 
-# --------------------------------------------------
+# ==================================================
 # SERIALIZER
-# --------------------------------------------------
+# ==================================================
 
 def serialize(m):
 
@@ -532,40 +370,39 @@ def serialize(m):
         "tier": m.tier,
         "region": m.region,
 
-        "match_date":
+        "match_date": (
             m.match_date.isoformat()
             if m.match_date
-            else None,
+            else None
+        ),
 
         "analysis": m.analysis,
 
-        "updated_at":
+        "updated_at": (
             m.updated_at.isoformat()
             if m.updated_at
             else None
+        )
     }
 
 
-# --------------------------------------------------
+# ==================================================
 # CREATE APP
-# --------------------------------------------------
+# ==================================================
 
 def create_app():
 
     app = Flask(__name__)
 
-
     app.config["SECRET_KEY"] = os.getenv(
         "SECRET_KEY",
-        "change-me"
+        "change-me-in-production"
     )
-
 
     database_url = os.getenv(
         "DATABASE_URL",
         "sqlite:///surewins.db"
     )
-
 
     if database_url.startswith("postgres://"):
 
@@ -575,7 +412,6 @@ def create_app():
             1
         )
 
-
     app.config[
         "SQLALCHEMY_DATABASE_URI"
     ] = database_url
@@ -584,23 +420,20 @@ def create_app():
         "SQLALCHEMY_TRACK_MODIFICATIONS"
     ] = False
 
-
     db.init_app(app)
 
 
-    # ------------------------------------------
+    # ==============================================
     # DATABASE SETUP
-    # ------------------------------------------
+    # ==============================================
 
     with app.app_context():
 
         db.create_all()
 
-
         if Match.query.count() == 0:
 
             now = datetime.utcnow()
-
 
             for h, a, p, t, r in SEED:
 
@@ -620,13 +453,12 @@ def create_app():
                     )
                 )
 
-
             db.session.commit()
 
 
-    # ------------------------------------------
+    # ==============================================
     # ADMIN AUTH
-    # ------------------------------------------
+    # ==============================================
 
     def admin_required(fn):
 
@@ -640,28 +472,27 @@ def create_app():
                 or request.args.get("token")
             )
 
-
             expected = os.getenv(
                 "ADMIN_TOKEN"
             )
 
-
-            if not expected or token != expected:
+            if (
+                not expected
+                or token != expected
+            ):
 
                 return jsonify({
                     "error": "Unauthorized"
                 }), 401
 
-
             return fn(*args, **kwargs)
-
 
         return wrapper
 
 
-    # ------------------------------------------
+    # ==============================================
     # HOME
-    # ------------------------------------------
+    # ==============================================
 
     @app.get("/")
     def index():
@@ -671,65 +502,64 @@ def create_app():
         )
 
 
-    # ------------------------------------------
+    # ==============================================
     # HEALTH
-    # ------------------------------------------
+    # ==============================================
 
     @app.get("/health")
     def health():
 
         return jsonify({
             "status": "ok",
-            "api_key_configured":
-                bool(os.getenv(
-                    "API_FOOTBALL_KEY"
-                )),
-            "time":
-                datetime.utcnow().isoformat()
+            "service": "sure-wins",
+            "api_key_configured": bool(
+                os.getenv("API_FOOTBALL_KEY")
+            ),
+            "time": datetime.utcnow().isoformat()
         })
 
 
-    # ------------------------------------------
-    # MATCHES
-    # ------------------------------------------
+    # ==============================================
+    # MATCH LIST
+    # ==============================================
 
     @app.get("/api/matches")
     def matches():
 
         tier = request.args.get("tier")
 
-        query = Match.query
-
+        q = Match.query
 
         if tier and tier != "ALL":
 
-            query = query.filter_by(
+            q = q.filter_by(
                 tier=tier
             )
 
-
-        rows = query.order_by(
+        rows = q.order_by(
             desc(Match.confidence),
             Match.id
         ).all()
 
-
         return jsonify({
-
-            "matches":
-                [serialize(x) for x in rows],
-
-            "updated":
-                datetime.utcnow().isoformat()
-
+            "matches": [
+                serialize(x)
+                for x in rows
+            ],
+            "updated": (
+                datetime.utcnow()
+                .isoformat()
+            )
         })
 
 
-    # ------------------------------------------
-    # SINGLE MATCH
-    # ------------------------------------------
+    # ==============================================
+    # MATCH DETAIL
+    # ==============================================
 
-    @app.get("/api/matches/<int:match_id>")
+    @app.get(
+        "/api/matches/<int:match_id>"
+    )
     def match_detail(match_id):
 
         match = db.session.get(
@@ -737,30 +567,41 @@ def create_app():
             match_id
         )
 
-
         if not match:
             abort(404)
-
 
         return jsonify(
             serialize(match)
         )
 
 
-    # ------------------------------------------
-    # MATCH ANALYSIS
-    # ------------------------------------------
+    # ==============================================
+    # REAL MATCH ANALYSIS
+    # ==============================================
 
     @app.get(
-        "/api/matches/<int:match_id>/analysis"
+        "/api/matches/"
+        "<int:match_id>/analysis"
     )
     def match_analysis(match_id):
+
+        # Return cached analysis
+        if match_id in analysis_cache:
+
+            print(
+                "RETURNING CACHED ANALYSIS:",
+                match_id
+            )
+
+            return jsonify(
+                analysis_cache[match_id]
+            )
+
 
         match = db.session.get(
             Match,
             match_id
         )
-
 
         if not match:
 
@@ -769,30 +610,17 @@ def create_app():
             }), 404
 
 
-        # Return cached analysis
-        if match_id in ANALYSIS_CACHE:
-
-            logging.info(
-                "Returning cached analysis for %s",
-                match_id
-            )
-
-            return jsonify(
-                ANALYSIS_CACHE[match_id]
-            )
-
-
         try:
 
-            logging.info(
-                "Starting analysis: %s vs %s",
+            print(
+                "ANALYZING:",
                 match.home,
+                "VS",
                 match.away
             )
 
 
-            # TEAM LOOKUP
-
+            # Find teams
             home_team = find_team(
                 match.home
             )
@@ -805,110 +633,74 @@ def create_app():
             if not home_team:
 
                 return jsonify({
-                    "error":
-                        f"Could not find team: {match.home}"
+                    "error": (
+                        f"Home team not found: "
+                        f"{match.home}"
+                    )
                 }), 404
 
 
             if not away_team:
 
                 return jsonify({
-                    "error":
-                        f"Could not find team: {match.away}"
+                    "error": (
+                        f"Away team not found: "
+                        f"{match.away}"
+                    )
                 }), 404
 
 
-            # Each section is isolated so one
-            # failed API call doesn't destroy
-            # the entire analysis
+            # Get forms
+            home_form = get_team_last_games(
+                home_team["id"]
+            )
 
-            try:
-
-                home_form = get_team_last_games(
-                    home_team["id"]
-                )
-
-            except Exception as e:
-
-                logging.exception(
-                    "Home form failed"
-                )
-
-                home_form = []
+            away_form = get_team_last_games(
+                away_team["id"]
+            )
 
 
-            try:
-
-                away_form = get_team_last_games(
-                    away_team["id"]
-                )
-
-            except Exception as e:
-
-                logging.exception(
-                    "Away form failed"
-                )
-
-                away_form = []
-
-
-            try:
-
-                h2h = get_head_to_head(
-                    home_team,
-                    away_team
-                )
-
-            except Exception as e:
-
-                logging.exception(
-                    "H2H failed"
-                )
-
-                h2h = {
-                    "total": 0,
-                    "home_wins": 0,
-                    "draws": 0,
-                    "away_wins": 0,
-                    "recent": []
-                }
+            # Get H2H
+            h2h = get_head_to_head(
+                home_team,
+                away_team
+            )
 
 
             result = {
 
-                "match":
-                    serialize(match),
+                "ok": True,
+
+                "match": serialize(match),
 
                 "teams": {
                     "home": home_team,
                     "away": away_team
                 },
 
-                "head_to_head":
-                    h2h,
+                "head_to_head": h2h,
 
-                "home_form":
-                    home_form,
+                "home_form": home_form,
 
-                "away_form":
-                    away_form,
+                "away_form": away_form,
 
-                "source":
-                    "API-Football",
+                "source": "API-Football",
 
-                "updated":
-                    datetime.utcnow().isoformat()
-
+                "updated": (
+                    datetime.utcnow()
+                    .isoformat()
+                )
             }
 
 
-            ANALYSIS_CACHE[
+            # Cache successful result
+            analysis_cache[
                 match_id
             ] = result
 
 
-            logging.info(
-                "Analysis successful: %s",
+            print(
+                "ANALYSIS SUCCESS:",
                 match_id
             )
 
@@ -918,69 +710,60 @@ def create_app():
 
         except Exception as error:
 
-            logging.exception(
-                "ANALYSIS FAILED"
+            print(
+                "ANALYSIS ERROR:",
+                repr(error)
             )
-
 
             return jsonify({
 
-                "error":
-                    "Analysis unavailable",
+                "ok": False,
 
-                "details":
-                    str(error),
+                "error": str(error),
 
-                "match":
-                    f"{match.home} vs {match.away}"
+                "match_id": match_id,
+
+                "home": match.home,
+
+                "away": match.away
 
             }), 500
 
 
-    # ------------------------------------------
+    # ==============================================
     # ADMIN REFRESH
-    # ------------------------------------------
+    # ==============================================
 
-    @app.post("/api/admin/refresh")
+    @app.post(
+        "/api/admin/refresh"
+    )
     @admin_required
     def refresh():
 
         now = datetime.utcnow()
 
-
         Match.query.update({
             Match.updated_at: now
         })
 
-
         db.session.commit()
 
-
-        # Clear caches
-
-        TEAM_CACHE.clear()
-        ANALYSIS_CACHE.clear()
-
+        # Clear analysis cache
+        analysis_cache.clear()
 
         return jsonify({
-
             "ok": True,
-
-            "message":
-                "Cache cleared and refresh completed.",
-
-            "updated":
-                now.isoformat()
-
+            "message": "Refresh complete",
+            "updated": now.isoformat()
         })
 
 
     return app
 
 
-# --------------------------------------------------
-# APP
-# --------------------------------------------------
+# ==================================================
+# APP ENTRY
+# ==================================================
 
 app = create_app()
 
