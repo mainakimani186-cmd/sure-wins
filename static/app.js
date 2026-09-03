@@ -1,5 +1,3 @@
-// Sure Wins JavaScript
-console.log("Sure Wins loaded successfully");
 const grid = document.getElementById("grid");
 const count = document.getElementById("count");
 const filters = document.querySelectorAll("#filters button");
@@ -18,8 +16,8 @@ async function loadMatches(tier = "ALL") {
     const data = await response.json();
 
     matches = data.matches || [];
-
     renderMatches(matches);
+
   } catch (error) {
     console.error("Error loading matches:", error);
 
@@ -53,7 +51,6 @@ function renderMatches(items) {
       </div>
 
       <h3>${match.home} vs ${match.away}</h3>
-
       <p class="region">${match.region}</p>
 
       <button onclick="showMatch(${match.id})">
@@ -74,6 +71,7 @@ async function showMatch(id) {
       `Tier: ${match.tier}\n\n` +
       `${match.analysis || "Analysis coming soon."}`
     );
+
   } catch (error) {
     console.error(error);
   }
@@ -82,9 +80,7 @@ async function showMatch(id) {
 filters.forEach(button => {
   button.addEventListener("click", () => {
     filters.forEach(btn => btn.classList.remove("active"));
-
     button.classList.add("active");
-
     loadMatches(button.dataset.tier);
   });
 });
