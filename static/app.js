@@ -1,260 +1,258 @@
 
-/* ================================
-   SURE WINS COMPACT MATCH LIST
-================================ */
 
-.match-row {
-    display: grid;
-    grid-template-columns: 48px 1fr auto 25px;
-    align-items: center;
-    gap: 14px;
-    padding: 16px;
-    margin-bottom: 10px;
+const cards = document.getElementById("cards");
+const count = document.getElementById("count");
+const updated = document.getElementById("updated");
+const search = document.getElementById("search");
+const refreshBtn = document.getElementById("refresh");
+const filters = document.querySelectorAll("#filters button");
 
-    background: #121c2b;
-    border: 1px solid #243247;
-    border-radius: 14px;
+const modal = document.getElementById("modal");
+const detail = document.getElementById("detail");
+const closeModal = document.querySelector(".close");
 
-    cursor: pointer;
-    transition: transform .2s ease, border-color .2s ease;
-}
-
-.match-row:hover {
-    transform: translateY(-2px);
-    border-color: #35d07f;
-}
-
-.match-rank {
-    font-size: 14px;
-    font-weight: bold;
-    color: #718096;
-}
-
-.match-main {
-    min-width: 0;
-}
-
-.match-teams {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-    font-size: 16px;
-}
-
-.match-teams span {
-    color: #6f7d91;
-    font-size: 12px;
-}
-
-.match-meta {
-    display: flex;
-    gap: 10px;
-    margin-top: 7px;
-    font-size: 11px;
-    color: #8490a3;
-}
-
-.row-tier {
-    color: #49df91;
-    font-weight: bold;
-    text-transform: uppercase;
-}
-
-.match-confidence {
-    text-align: right;
-}
-
-.match-confidence strong {
-    display: block;
-    color: #55e69b;
-    font-size: 18px;
-}
-
-.match-confidence small {
-    color: #718096;
-    font-size: 10px;
-}
-
-.match-arrow {
-    color: #55e69b;
-    font-size: 28px;
-}
+let allMatches = [];
+let currentTier = "ALL";
 
 
-/* ================================
-   ANALYSIS MODAL
-================================ */
+async function loadMatches() {
+    cards.innerHTML = '<div class="loading">Loading Sure Wins...</div>';
 
-.analysis-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
+    try {
+        const response = await fetch("/api/matches?ts=" + Date.now());
 
-.detail-tier {
-    padding: 7px 12px;
-    border-radius: 20px;
-    background: rgba(53, 208, 127, .12);
-    color: #55e69b;
-    font-weight: bold;
-}
+        if (!response.ok) {
+            throw new Error(`Server returned ${response.status}`);
+        }
 
-.modal-close-inline {
-    border: none;
-    background: #202b3c;
-    color: white;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    font-size: 24px;
-    cursor: pointer;
-}
+        const data = await response.json();
 
-.analysis-teams {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 15px;
-    text-align: center;
-    margin: 28px 0;
-}
+        allMatches = data.matches || [];
+        count.textContent = allMatches.length;
 
-.analysis-teams small {
-    color: #718096;
-    font-size: 10px;
-    letter-spacing: 1px;
-}
+        if (data.updated) {
+            updated.textContent = new Date(
+                data.updated
+            ).toLocaleTimeString();
+        }
 
-.analysis-teams h2 {
-    margin: 8px 0;
-    font-size: 21px;
-}
+        renderMatches();
 
-.analysis-vs {
-    color: #718096;
-    font-weight: bold;
-}
+    } catch (error) {
+        console.error(error);
 
-
-.confidence-section {
-    padding: 18px;
-    border-radius: 14px;
-    background: #182334;
-}
-
-.confidence-top {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 12px;
-}
-
-.confidence-top span {
-    color: #a6b0bf;
-}
-
-.confidence-top strong {
-    color: #55e69b;
-}
-
-.confidence-track {
-    height: 9px;
-    overflow: hidden;
-    border-radius: 20px;
-    background: #26364c;
-}
-
-.confidence-progress {
-    height: 100%;
-    border-radius: 20px;
-    background: linear-gradient(90deg, #25c778, #66e5a5);
-}
-
-
-.analysis-stats {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin: 20px 0;
-}
-
-.analysis-stats div {
-    padding: 14px;
-    background: #182334;
-    border-radius: 12px;
-}
-
-.analysis-stats small {
-    display: block;
-    margin-bottom: 6px;
-    color: #718096;
-    font-size: 10px;
-}
-
-.analysis-stats strong {
-    color: white;
-}
-
-
-.analysis-section {
-    padding: 18px;
-    border-radius: 14px;
-    background: #182334;
-}
-
-.analysis-section h3 {
-    margin-top: 0;
-}
-
-.analysis-section p {
-    color: #b4bdca;
-    line-height: 1.6;
-}
-
-
-.coming-next {
-    margin-top: 14px;
-    padding: 16px;
-    border: 1px solid #26364c;
-    border-radius: 12px;
-}
-
-.coming-next div {
-    font-weight: bold;
-    margin-bottom: 6px;
-}
-
-.coming-next small {
-    color: #718096;
-}
-
-
-/* MOBILE */
-
-@media (max-width: 600px) {
-
-    .match-row {
-        grid-template-columns: 34px 1fr auto;
-        gap: 10px;
-    }
-
-    .match-arrow {
-        display: none;
-    }
-
-    .match-teams {
-        font-size: 14px;
-    }
-
-    .match-confidence strong {
-        font-size: 16px;
-    }
-
-    .analysis-teams h2 {
-        font-size: 16px;
-    }
-
-    .analysis-stats {
-        grid-template-columns: 1fr;
+        cards.innerHTML = `
+            <div class="error-message">
+                Failed to load matches.<br>
+                <small>${error.message}</small>
+            </div>
+        `;
     }
 }
+
+
+function renderMatches() {
+    const query = search.value.toLowerCase().trim();
+
+    const filtered = allMatches.filter(match => {
+        const tierMatch =
+            currentTier === "ALL" ||
+            match.tier === currentTier;
+
+        const searchMatch =
+            match.home.toLowerCase().includes(query) ||
+            match.away.toLowerCase().includes(query);
+
+        return tierMatch && searchMatch;
+    });
+
+    if (!filtered.length) {
+        cards.innerHTML = `
+            <div class="empty-state">
+                No matches found.
+            </div>
+        `;
+        return;
+    }
+
+    cards.innerHTML = filtered.map((match, index) => `
+        <article
+            class="match-row"
+            data-id="${match.id}"
+        >
+            <div class="match-rank">
+                ${(index + 1).toString().padStart(2, "0")}
+            </div>
+
+            <div class="match-main">
+                <div class="match-teams">
+                    <strong>${match.home}</strong>
+                    <span>vs</span>
+                    <strong>${match.away}</strong>
+                </div>
+
+                <div class="match-meta">
+                    <span class="row-tier ${match.tier.replace(" ", "-").toLowerCase()}">
+                        ${match.tier}
+                    </span>
+
+                    <span>${match.region || "Global"}</span>
+                </div>
+            </div>
+
+            <div class="match-confidence">
+                <strong>${match.confidence}%</strong>
+                <small>confidence</small>
+            </div>
+
+            <div class="match-arrow">›</div>
+        </article>
+    `).join("");
+
+    document.querySelectorAll(".match-row").forEach(row => {
+        row.addEventListener("click", () => {
+            openMatch(row.dataset.id);
+        });
+    });
+}
+
+
+async function openMatch(id) {
+    modal.classList.remove("hidden");
+
+    detail.innerHTML = `
+        <div class="loading">
+            Loading match analysis...
+        </div>
+    `;
+
+    try {
+        const response = await fetch(`/api/matches/${id}`);
+
+        if (!response.ok) {
+            throw new Error("Could not load match details");
+        }
+
+        const match = await response.json();
+
+        detail.innerHTML = `
+            <div class="analysis-header">
+                <span class="detail-tier">
+                    ${match.tier}
+                </span>
+
+                <button class="modal-close-inline" onclick="closeMatch()">
+                    ×
+                </button>
+            </div>
+
+            <div class="analysis-teams">
+                <div>
+                    <small>HOME</small>
+                    <h2>${match.home}</h2>
+                </div>
+
+                <div class="analysis-vs">VS</div>
+
+                <div>
+                    <small>AWAY</small>
+                    <h2>${match.away}</h2>
+                </div>
+            </div>
+
+            <div class="confidence-section">
+                <div class="confidence-top">
+                    <span>Prediction Confidence</span>
+                    <strong>${match.confidence}%</strong>
+                </div>
+
+                <div class="confidence-track">
+                    <div
+                        class="confidence-progress"
+                        style="width:${match.confidence}%"
+                    ></div>
+                </div>
+            </div>
+
+            <div class="analysis-stats">
+                <div>
+                    <small>REGION</small>
+                    <strong>${match.region || "Global"}</strong>
+                </div>
+
+                <div>
+                    <small>MATCH DATE</small>
+                    <strong>${match.match_date || "TBA"}</strong>
+                </div>
+            </div>
+
+            <section class="analysis-section">
+                <h3>🧠 Sure Wins Analysis</h3>
+                <p>
+                    ${match.analysis || "Detailed analysis coming soon."}
+                </p>
+            </section>
+
+            <div class="coming-next">
+                <div>📊 Head-to-Head Statistics</div>
+                <small>
+                    Historical meetings and results — Phase B
+                </small>
+            </div>
+
+            <div class="coming-next">
+                <div>📈 Last 10 Games Form</div>
+                <small>
+                    Recent wins, draws, losses and performance — Phase B
+                </small>
+            </div>
+        `;
+
+    } catch (error) {
+        console.error(error);
+
+        detail.innerHTML = `
+            <div class="error-message">
+                Unable to load match analysis.
+            </div>
+        `;
+    }
+}
+
+
+function closeMatch() {
+    modal.classList.add("hidden");
+}
+
+
+filters.forEach(button => {
+    button.addEventListener("click", () => {
+        filters.forEach(btn => {
+            btn.classList.remove("active");
+        });
+
+        button.classList.add("active");
+
+        currentTier = button.dataset.tier;
+        renderMatches();
+    });
+});
+
+
+search.addEventListener("input", renderMatches);
+
+
+refreshBtn.addEventListener("click", loadMatches);
+
+
+closeModal.addEventListener("click", closeMatch);
+
+
+modal.addEventListener("click", event => {
+    if (event.target === modal) {
+        closeMatch();
+    }
+});
+
+
+loadMatches();
