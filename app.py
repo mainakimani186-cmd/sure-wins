@@ -1,132 +1,203 @@
-const grid = document.getElementById("grid");
-const count = document.getElementById("count");
-const filters = document.querySelectorAll("#filters button");
-const searchInput = document.getElementById("search");
+import os
+from datetime import datetime, date
+from functools import wraps
 
-let matches = [];
-let activeTier = "ALL";
+from flask import Flask, jsonify, render_template, request, abort
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import desc
 
-async function loadMatches(tier = "ALL") {
-  try {
-    grid.innerHTML = `
-      <div class="card">
-        <p>Loading matches...</p>
-      </div>
-    `;
+db = SQLAlchemy()
 
-    let url = "/api/matches";
+SEED = [
+    ("Barcelona", "Valencia", 86, "Very High", "Global"),
+    ("Manchester City", "Coventry City", 84, "Very High", "Global"),
+    ("RB Leipzig", "Werder Bremen", 78, "High", "Europe"),
+    ("Inter Miami", "Atlanta United", 76, "High", "North America"),
+    ("Atlético Madrid", "Athletic Bilbao", 72, "High", "Europe"),
+    ("Tai Po FC", "HK Rangers", 70, "High", "Asia"),
+    ("Philadelphia Union", "CF Montréal", 69, "High", "North America"),
+    ("Vancouver Whitecaps", "St. Louis City", 67, "High", "North America"),
+    ("FC Cincinnati", "DC United", 64, "Good", "North America"),
+    ("Fluminense", "Vasco da Gama", 63, "Good", "South America"),
+    ("Coritiba", "Mirassol", 61, "Good", "South America"),
+    ("Flamengo", "Remo", 60, "Good", "South America"),
+    ("Palmeiras", "Botafogo", 59, "Good", "South America"),
+    ("Club América", "Tijuana", 57, "Moderate", "North America"),
+    ("Tigres UANL", "Necaxa", 56, "Moderate", "North America"),
+    ("Brentford", "Sunderland", 55, "Moderate", "Europe"),
+    ("Fulham", "Crystal Palace", 54, "Moderate", "Europe"),
+    ("Newcastle United", "Bournemouth", 53, "Moderate", "Europe"),
+    ("Anderlecht", "Genk", 52, "Moderate", "Europe"),
+    ("Swansea City", "Wrexham", 51, "Moderate", "Europe")
+]
 
-    if (tier !== "ALL") {
-      url += `?tier=${encodeURIComponent(tier)}`;
+
+class Match(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    home = db.Column(db.String(120), nullable=False)
+    away = db.Column(db.String(120), nullable=False)
+    confidence = db.Column(db.Integer, nullable=False)
+    tier = db.Column(db.String(30), nullable=False)
+    region = db.Column(db.String(60))
+    match_date = db.Column(db.Date)
+    analysis = db.Column(db.Text)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
+
+
+def create_app():
+    app = Flask(__name__)
+
+    app.config["SECRET_KEY"] = os.getenv(
+        "SECRET_KEY",
+        "change-me-in-production"
+    )
+
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///surewins.db"
+    )
+
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace(
+            "postgres://",
+            "postgresql://",
+            1
+        )
+
+    app.config["SQLALCHEMY_DATABASE_URI"] = database_url
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    db.init_app(app)
+
+    with app.app_context():
+        db.create_all()
+
+        if Match.query.count() == 0:
+            now = datetime.utcnow()
+
+            for h, a, p, t, r in SEED:
+                db.session.add(
+                    Match(
+                        home=h,
+                        away=a,
+                        confidence=p,
+                        tier=t,
+                        region=r,
+                        match_date=date.today(),
+                        analysis=(
+                            f"{h} is currently ranked as a "
+                            f"{t.lower()} consensus pick."
+                        ),
+                        updated_at=now
+                    )
+                )
+
+            db.session.commit()
+
+    def admin_required(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            token = (
+                request.headers.get("X-Admin-Token")
+                or request.args.get("token")
+            )
+
+            expected = os.getenv("ADMIN_TOKEN")
+
+            if not expected or token != expected:
+                return jsonify({"error": "Unauthorized"}), 401
+
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    @app.get("/")
+    def index():
+        return render_template("index.html")
+
+    @app.get("/health")
+    def health():
+        return jsonify({
+            "status": "ok",
+            "service": "sure-wins",
+            "time": datetime.utcnow().isoformat()
+        })
+
+    @app.get("/api/matches")
+    def matches():
+        tier = request.args.get("tier")
+
+        q = Match.query
+
+        if tier and tier != "ALL":
+            q = q.filter_by(tier=tier)
+
+        rows = q.order_by(
+            desc(Match.confidence),
+            Match.id
+        ).all()
+
+        return jsonify({
+            "matches": [serialize(x) for x in rows],
+            "updated": datetime.utcnow().isoformat()
+        })
+
+    @app.get("/api/matches/<int:match_id>")
+    def match_detail(match_id):
+        m = db.session.get(Match, match_id)
+
+        if not m:
+            abort(404)
+
+        return jsonify(serialize(m))
+
+    @app.post("/api/admin/refresh")
+    @admin_required
+    def refresh():
+        now = datetime.utcnow()
+
+        Match.query.update({
+            Match.updated_at: now
+        })
+
+        db.session.commit()
+
+        return jsonify({
+            "ok": True,
+            "message": "Refresh hook executed.",
+            "updated": now.isoformat()
+        })
+
+    return app
+
+
+def serialize(m):
+    return {
+        "id": m.id,
+        "home": m.home,
+        "away": m.away,
+        "confidence": m.confidence,
+        "tier": m.tier,
+        "region": m.region,
+        "match_date": (
+            m.match_date.isoformat()
+            if m.match_date else None
+        ),
+        "analysis": m.analysis,
+        "updated_at": m.updated_at.isoformat()
     }
 
-    const response = await fetch(url);
 
-    if (!response.ok) {
-      throw new Error(`HTTP error ${response.status}`);
-    }
+app = create_app()
 
-    const data = await response.json();
 
-    matches = data.matches || [];
-
-    renderMatches(matches);
-
-    const updated = document.getElementById("updated");
-    if (updated && data.updated) {
-      updated.textContent = new Date(data.updated).toLocaleString();
-    }
-
-  } catch (error) {
-    console.error("Error loading matches:", error);
-
-    grid.innerHTML = `
-      <div class="card">
-        <h3>Unable to load matches</h3>
-        <p>Please try again later.</p>
-      </div>
-    `;
-  }
-}
-
-function renderMatches(items) {
-  count.textContent = items.length;
-
-  if (!items.length) {
-    grid.innerHTML = `
-      <div class="card">
-        <h3>No matches available</h3>
-        <p>Check back later for updated predictions.</p>
-      </div>
-    `;
-    return;
-  }
-
-  grid.innerHTML = items.map(match => `
-    <article class="card">
-      <div class="card-top">
-        <span class="tier">${match.tier}</span>
-        <span class="confidence">${match.confidence}%</span>
-      </div>
-
-      <h3>${match.home} vs ${match.away}</h3>
-
-      <p class="region">${match.region || "Global"}</p>
-
-      <button onclick="showMatch(${match.id})">
-        View Analysis
-      </button>
-    </article>
-  `).join("");
-}
-
-async function showMatch(id) {
-  try {
-    const response = await fetch(`/api/matches/${id}`);
-
-    if (!response.ok) {
-      throw new Error("Unable to load match");
-    }
-
-    const match = await response.json();
-
-    alert(
-      `${match.home} vs ${match.away}\n\n` +
-      `Confidence: ${match.confidence}%\n` +
-      `Tier: ${match.tier}\n\n` +
-      `${match.analysis || "Analysis coming soon."}`
-    );
-
-  } catch (error) {
-    console.error(error);
-    alert("Unable to load match analysis.");
-  }
-}
-
-filters.forEach(button => {
-  button.addEventListener("click", () => {
-    filters.forEach(btn => btn.classList.remove("active"));
-
-    button.classList.add("active");
-
-    activeTier = button.dataset.tier || "ALL";
-
-    loadMatches(activeTier);
-  });
-});
-
-if (searchInput) {
-  searchInput.addEventListener("input", event => {
-    const term = event.target.value.toLowerCase().trim();
-
-    const filtered = matches.filter(match =>
-      match.home.toLowerCase().includes(term) ||
-      match.away.toLowerCase().includes(term) ||
-      (match.region || "").toLowerCase().includes(term)
-    );
-
-    renderMatches(filtered);
-  });
-}
-
-loadMatches();
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 5000))
+    )
